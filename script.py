@@ -38,7 +38,7 @@ if os.getenv("RENDER"):
 else:
     API_KEY = "*****"
 
-ADMIN_ID = 1447915435 or 8523339855 # 👈 ВСТАВЬ сюда ID (аккаунта в ТГ) который нужен
+ADMIN_ID = [1447915435, 8523339855] # 👈 ВСТАВЬ сюда ID (аккаунта в ТГ) который нужен
 
 client = OpenAI(
     base_url="https://models.inference.ai.azure.com",
