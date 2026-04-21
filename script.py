@@ -32,9 +32,13 @@ async def start_web():
     await site.start()
 
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-API_KEY = os.getenv("API_KEY")
-ADMIN_ID = 8523339855  # 👈 ВСТАВЬ сюда ID (аккаунта в ТГ) который нужен
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") 
+if os.getenv("RENDER"):
+    API_KEY = os.getenv("API_KEY")
+else:
+    API_KEY = "*****"
+
+ADMIN_ID = 1447915435 or 8523339855 # 👈 ВСТАВЬ сюда ID (аккаунта в ТГ) который нужен
 
 client = OpenAI(
     base_url="https://models.inference.ai.azure.com",
@@ -90,7 +94,7 @@ def is_admin(message: types.Message):
 DB_FILE = "requests.db"
 
 
-def save_to_db(name, phone, service, visit_date, visit_time):
+def save_to_db(name, phone, service, region, visit_date, visit_time):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
@@ -117,15 +121,21 @@ def init_db():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT,
-            name TEXT,
-            phone TEXT,
-            service TEXT,
-            visit_date TEXT,
-            visit_time TEXT
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT,
+        name TEXT,
+        phone TEXT,
+        service TEXT,
+        region TEXT,
+        visit_date TEXT,
+        visit_time TEXT
         )
     """)
+    cursor.execute("PRAGMA table_info(requests)")
+    columns = [col[1] for col in cursor.fetchall()]
+
+    if "region" not in columns:
+        cursor.execute("ALTER TABLE requests ADD COLUMN region TEXT")
 
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_requests_date
@@ -145,7 +155,7 @@ def get_requests(limit=10):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT created_at, name, phone, service, visit_date, visit_time
+        SELECT created_at, name, phone, service, region, visit_date, visit_time
         FROM requests
         ORDER BY id DESC
         LIMIT ?
@@ -161,7 +171,7 @@ def get_requests_by_date(date_from, date_to):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT created_at, name, phone, service, visit_date, visit_time
+        SELECT created_at, name, phone, service, region, visit_date, visit_time
         FROM requests
         WHERE created_at BETWEEN ? AND ?
         ORDER BY id DESC
@@ -185,7 +195,7 @@ def export_to_excel(data):
     ws = wb.active
     ws.title = "CRM"
 
-    ws.append(["Дата", "Имя", "Телефон", "Услуга", "Дата визита", "Время"])
+    ws.append(["Создано", "Имя", "Телефон", "Услуга", "Регион", "Дата", "Время"])
 
     for row in data:
         ws.append(row)
@@ -277,26 +287,30 @@ def find_service(text):
 
 kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🚀 Старт")],
-        [KeyboardButton(text="🔄 Сбросить память")],
-        [KeyboardButton(text="📦 Услуги")],
-        [KeyboardButton(text="❓ Вопросы")],
-        [KeyboardButton(text="📞 Оставить заявку")]
+        [KeyboardButton(text="🚀 Начать")],
+        [KeyboardButton(text="📋 Программа")],
+        [KeyboardButton(text="💰 Выплаты")],
+        [KeyboardButton(text="🏠 Жильё")],
+        [KeyboardButton(text="📞 Подать заявку")],
+        [KeyboardButton(text="🔄 Сбросить")]
     ],
     resize_keyboard=True
 )
 
 
-def catalog():
-    buttons = [
-        [InlineKeyboardButton(text=k, callback_data=f"s:{k}")]
-        for k in knowledge_base.keys()
-    ]
 
-    # добавляем кнопку "Главное меню" отдельной строкой
-    buttons.append([
-        InlineKeyboardButton(text="🏠 Главное меню", callback_data="home")
-    ])
+def catalog():
+
+    buttons = [
+        [InlineKeyboardButton(text="🏡 Работа в селе", callback_data="s:Работа в селе")],
+        [InlineKeyboardButton(text="💰 Подъемные выплаты", callback_data="s:Подъемные выплаты")],
+        [InlineKeyboardButton(text="🏠 Кредит на жильё", callback_data="s:Кредит на жильё")],
+        [InlineKeyboardButton(text="👩‍🏫 Работа учителем", callback_data="s:Работа учителем")],
+
+        # доп. кнопки
+        [InlineKeyboardButton(text="📞 Оставить заявку", callback_data="o:general")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="home")]
+    ]
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -304,7 +318,8 @@ def confirm_kb():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="✅ Да"), KeyboardButton(text="❌ Нет")],
-            [KeyboardButton(text="📦 Каталог")], [KeyboardButton(text="🏠 Главное меню")]
+            [KeyboardButton(text="📋 Программа")],
+            [KeyboardButton(text="🏠 Главное меню")]
         ],
         resize_keyboard=True
     )
@@ -314,24 +329,19 @@ def confirm_kb():
 # =====================
 
 SYSTEM_PROMPT = """
-Ты — профессиональный консультант сервисного центра и компьютерного магазина.
+Ты — консультант государственной программы «С дипломом в село».
 
 ТВОЯ РОЛЬ:
-- сначала выяснить потребности клиента
-- задавать уточняющие вопросы
-- НЕ предлагать услугу сразу
-- только после понимания задачи — предлагать вариант
-
-СТИЛЬ ДИАЛОГА:
-1. уточняющие вопросы
-2. уточнение бюджета и целей
-3. предложение решения
-4. переход к заявке
+- объяснять условия программы
+- уточнять образование пользователя
+- уточнять специальность
+- уточнять регион
+- помогать оформить заявку
 
 ПРАВИЛА:
-- не торопись с продажей
-- всегда сначала уточняй
-- веди клиента как консультант в магазине
+- отвечай просто и понятно
+- не придумывай несуществующие условия
+- помогай пользователю понять подходит ли ему программа
 """
 
 
@@ -353,57 +363,85 @@ async def start_cmd(message: types.Message):
     user_histories[message.from_user.id] = []
 
     await message.answer(
-        "👋 Я AI-консультант сервисного центра.\n",
+        "👋 Добро пожаловать!\n\n"
+        "Я помогу вам узнать о программе работы в селе и оформить заявку.",
         reply_markup=kb
     )
-
-
 
 # =====================
 # BUTTONS
 # =====================
 
-@dp.message(lambda msg: msg.text == "🚀 Старт")
-async def start_button(message: types.Message):
-    user_histories[message.from_user.id] = []
-    await message.answer("🚀 Новый диалог начат!", reply_markup=kb)
-
-
-@dp.message(lambda msg: msg.text == "🔄 Сбросить память")
-async def clear_memory(message: types.Message):
-    user_histories[message.from_user.id] = []
-    await message.answer("🧹 Память очищена")
-
-@dp.message(lambda m: m.text == "📦 Услуги")
-async def cat(m: types.Message):
-    user_state[m.from_user.id] = "catalog"
-    await m.answer("📦 Каталог услуг:", reply_markup=catalog())
-
-@dp.message(lambda msg: msg.text == "🏠 Главное меню")
-async def main_menu(m: types.Message):
-    uid = m.from_user.id
+@dp.callback_query(lambda c: c.data == "home")
+async def home(call: types.CallbackQuery):
+    uid = call.from_user.id
 
     user_state[uid] = None
     user_contacts.pop(uid, None)
-    user_histories[uid] = []
-
-    await m.answer("🏠 Главное меню", reply_markup=kb)
-
-
-# обработчик Home
-
-@dp.callback_query(lambda c: c.data == "home")
-async def home_handler(call: types.CallbackQuery):
-    uid = call.from_user.id
-
-    user_state.pop(uid, None)
-    user_contacts.pop(uid, None)
     user_last_service.pop(uid, None)
+    user_stage[uid] = "discover"
     user_histories.pop(uid, None)
 
     await call.message.answer("🏠 Главное меню", reply_markup=kb)
     await call.answer()
 
+
+@dp.message(lambda m: m.text == "📋 Программа")
+async def program_info(m: types.Message):
+    await m.answer(
+        "📋 Государственная программа:\n\n"
+        "Вы можете поехать работать в село по специальности.\n"
+        "Доступны подъемные выплаты и жильё."
+    )
+
+
+@dp.message(lambda m: m.text == "💰 Выплаты")
+async def payments(m: types.Message):
+    await m.answer(
+        "💰 Подъемные выплаты:\n\n"
+        "Выплачиваются при переезде.\n"
+        "Сумма зависит от региона."
+    )
+
+
+@dp.message(lambda m: m.text == "🏠 Жильё")
+async def housing(m: types.Message):
+    await m.answer(
+        "🏠 Жильё:\n\n"
+        "Предоставляется льготный кредит на покупку дома в селе."
+    )
+
+
+@dp.message(lambda m: m.text == "📞 Подать заявку")
+async def start_application(m: types.Message):
+    user_contacts[m.from_user.id] = {
+        "step": "name",
+        "service": "Работа в селе"
+    }
+    await m.answer("Введите ваше имя:")
+
+
+@dp.message(lambda m: m.text == "🔄 Сбросить")
+async def reset(m: types.Message):
+    uid = m.from_user.id
+
+    user_histories[uid] = []
+    user_contacts.pop(uid, None)
+    user_state[uid] = None
+    user_requirements[uid] = {}
+    user_last_offer[uid] = None
+
+    await m.answer("🔄 Данные сброшены", reply_markup=kb)
+
+
+@dp.message(lambda m: "работа" in m.text.lower() or "село" in m.text.lower())
+async def start_gov_flow(m: types.Message):
+    uid = m.from_user.id
+
+    user_state[uid] = "gov_form"
+    user_requirements[uid] = {}
+
+    await m.answer("🎓 У вас есть диплом? Какая специальность?")
 
 # =====================
 # INLINE SERVICE CARD
@@ -425,7 +463,7 @@ async def service(call: types.CallbackQuery):
     ])
 
     await call.message.answer(
-        f"📦 {key}\n\n💡 {knowledge_base[key]['text']}\n\nПодходит ли вам услуга?",
+        f"📌 {key}\n\n💡 {knowledge_base[key]['text']}\n\nХотите оформить заявку?",
         reply_markup=kb_inline
     )
 
@@ -538,7 +576,22 @@ async def filter_date(message: types.Message):
 @dp.message()
 async def chat(m: types.Message):
     uid = m.from_user.id
+
     text = (m.text or "").lower()
+    clean_text = text.replace("🏠", "").strip()
+
+    # =====================
+    # GLOBAL RESET (ЛУЧШЕ ВСЕХ ПЕРВЫМ)
+    # =====================
+    if "главное меню" in clean_text:
+        user_state[uid] = None
+        user_contacts.pop(uid, None)
+        user_last_service.pop(uid, None)
+        user_stage[uid] = "discover"
+        user_histories.pop(uid, None)
+
+        await m.answer("🏠 Главное меню", reply_markup=kb)
+        return
 
     # =====================
     # INIT SAFE STATE
@@ -577,7 +630,8 @@ async def chat(m: types.Message):
     # =====================
     # GLOBAL RESET
     # =====================
-    if text == "главное меню":
+    clean_text = (m.text or "").lower().replace("🏠", "").strip()
+    if "главное меню" in clean_text:
         user_state[uid] = None
         user_contacts.pop(uid, None)
         user_last_service.pop(uid, None)
@@ -590,45 +644,96 @@ async def chat(m: types.Message):
     # ORDER FLOW
     # =====================
     if uid in user_contacts:
-        user_stage[uid] = "order"
         step = user_contacts[uid]["step"]
 
+        # ИМЯ
         if step == "name":
-            user_contacts[uid]["name"] = m.text
+            user_contacts[uid]["name"] = m.text.strip()
             user_contacts[uid]["step"] = "phone"
-            await m.answer("📱 Введите телефон:")
+            await m.answer("📱 Введите телефон (пример: +77001234567):")
             return
 
+        # ТЕЛЕФОН (валидация)
         if step == "phone":
-            user_contacts[uid]["phone"] = m.text
+            phone = re.sub(r"\D", "", m.text)
+
+            if len(phone) < 10:
+                await m.answer("❌ Неверный телефон. Введите корректный номер:")
+                return
+
+            user_contacts[uid]["phone"] = phone
+            user_contacts[uid]["step"] = "region"
+            await m.answer("📍 Укажите регион (например: Аксу):")
+            return
+
+        # РЕГИОН
+        if step == "region":
+            user_contacts[uid]["region"] = m.text.strip()
             user_contacts[uid]["step"] = "date"
-            await m.answer("📅 Введите дату:")
+            await m.answer("📅 Введите дату (ДД.ММ.ГГГГ):")
             return
 
+        # ДАТА (валидация)
         if step == "date":
-            user_contacts[uid]["date"] = m.text
-            user_contacts[uid]["step"] = "time"
-            await m.answer("⏰ Введите время:")
+            try:
+                datetime.strptime(m.text, "%d.%m.%Y")
+                user_contacts[uid]["date"] = m.text
+                user_contacts[uid]["step"] = "time"
+                await m.answer("⏰ Введите время (например: 14:30):")
+            except:
+                await m.answer("❌ Неверный формат даты. Пример: 25.04.2026")
             return
 
+        # ВРЕМЯ (валидация)
         if step == "time":
-            name = user_contacts[uid]["name"]
-            phone = user_contacts[uid]["phone"]
-            service = user_contacts[uid]["service"]
-            date = user_contacts[uid]["date"]
-            time = m.text
+            if not re.match(r"^\d{1,2}:\d{2}$", m.text):
+                await m.answer("❌ Неверный формат времени. Пример: 14:30")
+                return
 
-            save_to_db(name, phone, service, date, time)
+            user_contacts[uid]["time"] = m.text
+            user_contacts[uid]["step"] = "confirm"
+
+            data = user_contacts[uid]
 
             await m.answer(
-                f"✅ Заявка создана! и передана специалистам\n\n"
-                f"📋 Программа: {service}\n📍 Регион: {user_requirements[uid].get('region', '-')}"
+                f"📋 Проверьте данные:\n\n"
+                f"👤 Имя: {data['name']}\n"
+                f"📱 Телефон: {data['phone']}\n"
+                f"📍 Регион: {data['region']}\n"
+                f"📅 Дата: {data['date']}\n"
+                f"⏰ Время: {data['time']}\n\n"
+                f"Подтвердить?",
+                reply_markup=confirm_kb()
             )
-
-            user_contacts.pop(uid, None)
-            user_state[uid] = None
-            user_stage[uid] = "discover"
             return
+
+        # ПОДТВЕРЖДЕНИЕ
+        if step == "confirm":
+
+            if "да" in m.text.lower():
+                data = user_contacts[uid]
+
+                save_to_db(
+                    data["name"],
+                    data["phone"],
+                    data["service"],
+                    data["region"],
+                    data["date"],
+                    data["time"]
+                )
+
+                await m.answer(
+                    "✅ Заявка успешно создана!\n"
+                    "С вами свяжутся в ближайшее время."
+                )
+
+                user_contacts.pop(uid)
+                return
+
+            elif "нет" in m.text.lower():
+                user_contacts.pop(uid)
+                await m.answer("❌ Заявка отменена")
+                return
 
     # =====================
     # CONFIRM FLOW
@@ -638,16 +743,15 @@ async def chat(m: types.Message):
         if "да" in text:
             service = user_last_service.get(uid)
 
-            if service:
-                user_contacts[uid] = {
-                    "step": "name",
-                    "service": service
-                }
+            user_contacts[uid] = {
+                "step": "name",
+                "service": service
+            }
 
-                user_state[uid] = "order"
-                user_stage[uid] = "order"
+            user_state[uid] = "order"
+            user_stage[uid] = "order"
 
-                await m.answer(f"📦 {service}\n\nВведите имя:")
+            await m.answer("📦 Отлично! Давайте оформим заявку.\n\nВведите имя:")
             return
 
         if "нет" in text:
@@ -658,6 +762,9 @@ async def chat(m: types.Message):
         if "каталог" in text:
             user_state[uid] = "catalog"
             await m.answer("📦 Каталог:", reply_markup=catalog())
+            return
+
+        if user_state.get(uid) in ["order", "confirm"]:
             return
 
     # =====================
@@ -688,9 +795,9 @@ async def chat(m: types.Message):
         return
 
     # =====================
-    # GOV PROGRAM FLOW
+    # GOV PROGRAM FLOW (FIXED)
     # =====================
-    if "диплом" in text or "работа" in text or "село" in text:
+    if user_state.get(uid) == "gov_form":
 
         if "education" not in user_requirements[uid]:
             user_requirements[uid]["education"] = m.text
@@ -707,7 +814,7 @@ async def chat(m: types.Message):
             await m.answer(
                 "💡 Вам подходит программа:\n"
                 "— подъемные выплаты\n"
-                "— льготный кредит на жильё\n\n"
+                "— льготный кредит\n\n"
                 "Хотите оформить заявку?"
             )
             return
